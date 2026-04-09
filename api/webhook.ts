@@ -13,13 +13,7 @@ interface SentryEvent {
   }
 }
 
-interface SlackBlock {
-  type: string
-  text?: { type: string; text: string }
-  fields?: Array<{ type: string; text: string }>
-}
-
-function buildSlackBlocks(body: SentryEvent): SlackBlock[] {
+function buildBlocks(body: SentryEvent): Record<string, unknown>[] {
   const level = body.event?.level ?? 'unknown'
   const title = body.event?.metadata?.title ?? 'No title'
   const project = body.project ?? 'unknown'
@@ -28,16 +22,12 @@ function buildSlackBlocks(body: SentryEvent): SlackBlock[] {
   const culprit = body.culprit ?? ''
   const user = body.event?.user?.email ?? 'anonymous'
   const issueUrl = body.url ?? ''
-
   const emoji = level === 'error' ? '🔴' : level === 'warning' ? '🟡' : '🔵'
 
-  const blocks: SlackBlock[] = [
+  const blocks: Record<string, unknown>[] = [
     {
       type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `${emoji} *${issueUrl ? `<${issueUrl}|${title}>` : title}*`,
-      },
+      text: { type: 'mrkdwn', text: `${emoji} *${issueUrl ? `<${issueUrl}|${title}>` : title}*` },
     },
     {
       type: 'section',
@@ -53,15 +43,11 @@ function buildSlackBlocks(body: SentryEvent): SlackBlock[] {
   if (message || culprit) {
     blocks.push({
       type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: [message, culprit ? `\`${culprit}\`` : ''].filter(Boolean).join('\n'),
-      },
+      text: { type: 'mrkdwn', text: [message, culprit ? `\`${culprit}\`` : ''].filter(Boolean).join('\n') },
     })
   }
 
   blocks.push({ type: 'divider' })
-
   return blocks
 }
 
@@ -75,33 +61,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   const channelId = process.env.CHANNEL_ID
 
   if (!slackToken || !channelId) {
-    res.status(500).send('Missing environment variables')
+    res.status(500).json({ error: 'Missing env vars' })
     return
   }
 
-  const body = req.body as SentryEvent
-  const blocks = buildSlackBlocks(body)
+  try {
+    const body = req.body as SentryEvent
+    const blocks = buildBlocks(body)
 
-  const slackResponse = await fetch('https://slack.com/api/chat.postMessage', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${slackToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      channel: channelId,
-      blocks,
-      text: `Sentry: ${body.event?.metadata?.title ?? 'New event'}`,
-    }),
-  })
+    const slackRes = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${slackToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        channel: channelId,
+        blocks,
+        text: `Sentry: ${body.event?.metadata?.title ?? 'New event'}`,
+      }),
+    })
 
-  const result = (await slackResponse.json()) as { ok: boolean; error?: string }
+    const result = (await slackRes.json()) as { ok: boolean; error?: string }
 
-  if (!result.ok) {
-    console.error('Slack API error:', result.error)
-    res.status(502).send(`Slack error: ${result.error}`)
-    return
+    if (!result.ok) {
+      res.status(502).json({ error: result.error })
+      return
+    }
+
+    res.status(200).send('OK')
+  } catch (error) {
+    res.status(500).json({ error: String(error) })
   }
-
-  res.status(200).send('OK')
 }
