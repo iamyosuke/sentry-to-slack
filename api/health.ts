@@ -1,7 +1,5 @@
-export const config = { runtime: 'edge' }
+import type { VercelRequest, VercelResponse } from '@vercel/node'
 
-export function GET(): Response {
-  return new Response(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }), {
-    headers: { 'Content-Type': 'application/json' },
-  })
+export default function handler(_req: VercelRequest, res: VercelResponse): void {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() })
 }

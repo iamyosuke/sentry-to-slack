@@ -4,6 +4,7 @@
   "private": true,
   "devDependencies": {
     "@types/node": "^25.5.2",
+    "@vercel/node": "^5.7.2",
     "typescript": "^6.0.2"
   }
 }

@@ -1,4 +1,4 @@
-export const config = { runtime: 'edge' }
+import type { VercelRequest, VercelResponse } from '@vercel/node'
 
 interface SentryEvent {
   project: string
@@ -10,7 +10,6 @@ interface SentryEvent {
     user?: { email?: string }
     environment?: string
     metadata?: { title?: string }
-    tags?: Array<{ key: string; value: string }>
   }
 }
 
@@ -66,54 +65,21 @@ function buildSlackBlocks(body: SentryEvent): SlackBlock[] {
   return blocks
 }
 
-export async function POST(request: Request): Promise<Response> {
+export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.status(405).send('Method not allowed')
+    return
+  }
+
   const slackToken = process.env.SLACK_ACCESS_TOKEN
   const channelId = process.env.CHANNEL_ID
-  const sentrySecret = process.env.SENTRY_CLIENT_SECRET
 
   if (!slackToken || !channelId) {
-    return new Response('Missing environment variables', { status: 500 })
+    res.status(500).send('Missing environment variables')
+    return
   }
 
-  // Verify Sentry webhook signature if secret is configured
-  if (sentrySecret) {
-    const signature = request.headers.get('sentry-hook-signature')
-    if (!signature) {
-      return new Response('Missing signature', { status: 401 })
-    }
-
-    const rawBody = await request.text()
-    const encoder = new TextEncoder()
-    const key = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(sentrySecret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['sign'],
-    )
-    const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(rawBody))
-    const expectedSignature = Array.from(new Uint8Array(sig))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('')
-
-    if (signature !== expectedSignature) {
-      return new Response('Invalid signature', { status: 401 })
-    }
-
-    // Parse body from raw text since we already consumed the stream
-    const body = JSON.parse(rawBody) as SentryEvent
-    return await sendToSlack(body, slackToken, channelId)
-  }
-
-  const body = (await request.json()) as SentryEvent
-  return await sendToSlack(body, slackToken, channelId)
-}
-
-async function sendToSlack(
-  body: SentryEvent,
-  slackToken: string,
-  channelId: string,
-): Promise<Response> {
+  const body = req.body as SentryEvent
   const blocks = buildSlackBlocks(body)
 
   const slackResponse = await fetch('https://slack.com/api/chat.postMessage', {
@@ -133,8 +99,9 @@ async function sendToSlack(
 
   if (!result.ok) {
     console.error('Slack API error:', result.error)
-    return new Response(`Slack error: ${result.error}`, { status: 502 })
+    res.status(502).send(`Slack error: ${result.error}`)
+    return
   }
 
-  return new Response('OK', { status: 200 })
+  res.status(200).send('OK')
 }
