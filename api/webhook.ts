@@ -1,5 +1,3 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node'
-
 interface SentryEvent {
   project: string
   url?: string
@@ -51,22 +49,20 @@ function buildBlocks(body: SentryEvent): Record<string, unknown>[] {
   return blocks
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+export default async function handler(req: Request): Promise<Response> {
   if (req.method !== 'POST') {
-    res.status(405).send('Method not allowed')
-    return
+    return new Response('Method not allowed', { status: 405 })
   }
 
   const slackToken = process.env.SLACK_ACCESS_TOKEN
   const channelId = process.env.CHANNEL_ID
 
   if (!slackToken || !channelId) {
-    res.status(500).json({ error: 'Missing env vars' })
-    return
+    return new Response(JSON.stringify({ error: 'Missing env vars' }), { status: 500 })
   }
 
   try {
-    const body = req.body as SentryEvent
+    const body = (await req.json()) as SentryEvent
     const blocks = buildBlocks(body)
 
     const slackRes = await fetch('https://slack.com/api/chat.postMessage', {
@@ -85,12 +81,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const result = (await slackRes.json()) as { ok: boolean; error?: string }
 
     if (!result.ok) {
-      res.status(502).json({ error: result.error })
-      return
+      return new Response(JSON.stringify({ error: result.error }), { status: 502 })
     }
 
-    res.status(200).send('OK')
+    return new Response('OK', { status: 200 })
   } catch (error) {
-    res.status(500).json({ error: String(error) })
+    return new Response(JSON.stringify({ error: String(error) }), { status: 500 })
   }
 }
