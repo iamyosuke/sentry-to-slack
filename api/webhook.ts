@@ -1,3 +1,5 @@
+export const config = { runtime: 'edge' }
+
 interface SentryEvent {
   project: string
   url?: string
@@ -49,8 +51,8 @@ function buildBlocks(body: SentryEvent): Record<string, unknown>[] {
   return blocks
 }
 
-export default async function handler(req: Request): Promise<Response> {
-  if (req.method !== 'POST') {
+export default async function handler(request: Request): Promise<Response> {
+  if (request.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 })
   }
 
@@ -58,11 +60,14 @@ export default async function handler(req: Request): Promise<Response> {
   const channelId = process.env.CHANNEL_ID
 
   if (!slackToken || !channelId) {
-    return new Response(JSON.stringify({ error: 'Missing env vars' }), { status: 500 })
+    return new Response(JSON.stringify({ error: 'Missing env vars', hasToken: !!slackToken, hasChannel: !!channelId }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
 
   try {
-    const body = (await req.json()) as SentryEvent
+    const body = (await request.json()) as SentryEvent
     const blocks = buildBlocks(body)
 
     const slackRes = await fetch('https://slack.com/api/chat.postMessage', {
@@ -81,11 +86,17 @@ export default async function handler(req: Request): Promise<Response> {
     const result = (await slackRes.json()) as { ok: boolean; error?: string }
 
     if (!result.ok) {
-      return new Response(JSON.stringify({ error: result.error }), { status: 502 })
+      return new Response(JSON.stringify({ error: result.error }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json' },
+      })
     }
 
     return new Response('OK', { status: 200 })
   } catch (error) {
-    return new Response(JSON.stringify({ error: String(error) }), { status: 500 })
+    return new Response(JSON.stringify({ error: String(error) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
 }
