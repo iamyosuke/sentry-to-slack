@@ -9,12 +9,13 @@ interface SentryAlertPayload {
       level?: string
       culprit?: string
       environment?: string
+      project?: string | number
       web_url?: string
       metadata?: { type?: string; value?: string }
       message?: string
       logentry?: { formatted?: string }
       user?: { email?: string; username?: string }
-      tags?: Array<[string, string]>
+      tags?: Array<[string, string] | { key?: string; value?: string }>
     }
     triggered_rule?: string
   }
@@ -44,6 +45,37 @@ interface SlackMessage {
   user: string
   issueUrl: string
   rule: string
+}
+
+function escapeMrkdwn(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function safeSlackLink(url: string, label: string): string {
+  const cleanUrl = url.trim()
+  if (!cleanUrl || /[\s|<>]/.test(cleanUrl)) return escapeMrkdwn(label)
+  return `<${cleanUrl}|${escapeMrkdwn(label)}>`
+}
+
+function escapeInlineCode(value: string): string {
+  return escapeMrkdwn(value).replace(/`/g, "'")
+}
+
+function stringifyValue(value: string | number | undefined | null): string | undefined {
+  if (value === undefined || value === null) return undefined
+  return String(value)
+}
+
+function tagValue(
+  tags: Array<[string, string] | { key?: string; value?: string }> | undefined,
+  key: string
+): string | undefined {
+  const tag = tags?.find((entry) => Array.isArray(entry) ? entry[0] === key : entry.key === key)
+  if (!tag) return undefined
+  return Array.isArray(tag) ? tag[1] : tag.value
 }
 
 function firstMeaningful(...values: Array<string | undefined | null>): string | undefined {
@@ -102,8 +134,8 @@ function parseAlertPayload(body: SentryAlertPayload): SlackMessage {
       url: event?.web_url,
     }),
     level: event?.level ?? 'unknown',
-    project: event?.tags?.find(([k]) => k === 'project')?.[1] ?? 'unknown',
-    environment: event?.environment ?? event?.tags?.find(([k]) => k === 'environment')?.[1] ?? 'unknown',
+    project: firstMeaningful(tagValue(event?.tags, 'project'), stringifyValue(event?.project)) ?? 'unknown',
+    environment: event?.environment ?? tagValue(event?.tags, 'environment') ?? 'unknown',
     message: event?.metadata?.value ?? '',
     culprit: event?.culprit ?? '',
     user: event?.user?.email ?? event?.user?.username ?? 'anonymous',
@@ -135,24 +167,28 @@ function parseLegacyPayload(body: SentryLegacyPayload): SlackMessage {
 
 function buildBlocks(msg: SlackMessage): Record<string, unknown>[] {
   const emoji = msg.level === 'error' ? '🔴' : msg.level === 'warning' ? '🟡' : '🔵'
+  const title = msg.issueUrl ? safeSlackLink(msg.issueUrl, msg.title) : escapeMrkdwn(msg.title)
 
   const blocks: Record<string, unknown>[] = [
     {
       type: 'section',
-      text: { type: 'mrkdwn', text: `${emoji} *${msg.issueUrl ? `<${msg.issueUrl}|${msg.title}>` : msg.title}*` },
+      text: { type: 'mrkdwn', text: `${emoji} *${title}*` },
     },
     {
       type: 'section',
       fields: [
-        { type: 'mrkdwn', text: `*Project:*\n${msg.project}` },
-        { type: 'mrkdwn', text: `*Environment:*\n${msg.environment}` },
-        { type: 'mrkdwn', text: `*Level:*\n${msg.level}` },
-        { type: 'mrkdwn', text: `*User:*\n${msg.user}` },
+        { type: 'mrkdwn', text: `*Project:*\n${escapeMrkdwn(msg.project)}` },
+        { type: 'mrkdwn', text: `*Environment:*\n${escapeMrkdwn(msg.environment)}` },
+        { type: 'mrkdwn', text: `*Level:*\n${escapeMrkdwn(msg.level)}` },
+        { type: 'mrkdwn', text: `*User:*\n${escapeMrkdwn(msg.user)}` },
       ],
     },
   ]
 
-  const details = [msg.message, msg.culprit ? `\`${msg.culprit}\`` : ''].filter(Boolean).join('\n')
+  const details = [
+    msg.message ? escapeMrkdwn(msg.message) : '',
+    msg.culprit ? `\`${escapeInlineCode(msg.culprit)}\`` : '',
+  ].filter(Boolean).join('\n')
   if (details) {
     blocks.push({
       type: 'section',
@@ -163,7 +199,7 @@ function buildBlocks(msg: SlackMessage): Record<string, unknown>[] {
   if (msg.rule) {
     blocks.push({
       type: 'context',
-      elements: [{ type: 'mrkdwn', text: `Rule: ${msg.rule}` }],
+      elements: [{ type: 'mrkdwn', text: `Rule: ${escapeMrkdwn(msg.rule)}` }],
     })
   }
 
@@ -206,7 +242,7 @@ export default async function handler(request: Request): Promise<Response> {
       body: JSON.stringify({
         channel: channelId,
         blocks,
-        text: `Sentry: ${msg.title}`,
+        text: `Sentry: ${escapeMrkdwn(msg.title)}`,
       }),
     })
 
