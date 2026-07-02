@@ -11,6 +11,8 @@ interface SentryAlertPayload {
       environment?: string
       web_url?: string
       metadata?: { type?: string; value?: string }
+      message?: string
+      logentry?: { formatted?: string }
       user?: { email?: string; username?: string }
       tags?: Array<[string, string]>
     }
@@ -28,7 +30,7 @@ interface SentryLegacyPayload {
     logentry?: { formatted?: string }
     user?: { email?: string }
     environment?: string
-    metadata?: { title?: string }
+    metadata?: { title?: string; type?: string; value?: string }
   }
 }
 
@@ -44,10 +46,61 @@ interface SlackMessage {
   rule: string
 }
 
+function firstMeaningful(...values: Array<string | undefined | null>): string | undefined {
+  return values
+    .map((value) => value?.trim())
+    .find((value) => value && value !== '<unknown>' && value.toLowerCase() !== 'unknown')
+}
+
+function summarizeUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined
+  try {
+    const parsed = new URL(url)
+    return parsed.pathname || parsed.hostname
+  } catch {
+    return undefined
+  }
+}
+
+function buildTitle(input: {
+  title?: string
+  metadataTitle?: string
+  metadataType?: string
+  metadataValue?: string
+  message?: string
+  culprit?: string
+  url?: string
+}): string {
+  const base = firstMeaningful(
+    input.title,
+    input.metadataTitle,
+    input.metadataValue,
+    input.message
+  )
+
+  if (base) {
+    const type = firstMeaningful(input.metadataType)
+    return type && !base.includes(type) ? `${type}: ${base}` : base
+  }
+
+  const culprit = firstMeaningful(input.culprit)
+  if (culprit) return culprit
+
+  const path = summarizeUrl(input.url)
+  return path ? `Sentry issue on ${path}` : 'Sentry issue'
+}
+
 function parseAlertPayload(body: SentryAlertPayload): SlackMessage {
   const event = body.data?.event
   return {
-    title: event?.title ?? 'No title',
+    title: buildTitle({
+      title: event?.title,
+      metadataType: event?.metadata?.type,
+      metadataValue: event?.metadata?.value,
+      message: event?.message ?? event?.logentry?.formatted,
+      culprit: event?.culprit,
+      url: event?.web_url,
+    }),
     level: event?.level ?? 'unknown',
     project: event?.tags?.find(([k]) => k === 'project')?.[1] ?? 'unknown',
     environment: event?.environment ?? event?.tags?.find(([k]) => k === 'environment')?.[1] ?? 'unknown',
@@ -61,7 +114,14 @@ function parseAlertPayload(body: SentryAlertPayload): SlackMessage {
 
 function parseLegacyPayload(body: SentryLegacyPayload): SlackMessage {
   return {
-    title: body.event?.metadata?.title ?? 'No title',
+    title: buildTitle({
+      metadataTitle: body.event?.metadata?.title,
+      metadataType: body.event?.metadata?.type,
+      metadataValue: body.event?.metadata?.value,
+      message: body.event?.logentry?.formatted,
+      culprit: body.culprit,
+      url: body.url,
+    }),
     level: body.event?.level ?? 'unknown',
     project: body.project ?? 'unknown',
     environment: body.event?.environment ?? 'unknown',
